@@ -67,10 +67,12 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
         return filename, metadata, sample_labels
 
     def _get_sample_labels(self, filename):
-        for element in self._annotations: 
-            for key,value in element.items():
-                if key == filename:
-                    return value
+        for element in self._annotations:
+            # for key,value in element.items():
+            #     if key == filename:
+            #         return value
+            if filename in element:
+                return element[filename]
         
 
     @property
@@ -99,7 +101,7 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
             layer = self._get_answers_layers(element)
             url = self._get_url(element)
 
-            if layer != None :
+            if layer is not None :
                 detections = self._from_answer_to_detection(layer, element)
                 scene_attributes = self._get_answer_scene_attributes(element)
                 result.append({url:{**detections, **scene_attributes}})
@@ -116,18 +118,21 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
         Reference: https://voxel51.com/docs/fiftyone/user_guide/using_datasets.html#object-detection
         """
         result = []
+        # Jsalas: Can we put all sama-format strings in an Enum?
         vectors = layers['layers']['vector_tagging']
         for vector in vectors:
             shapes = vector['shapes']
             for shape in shapes:
                 tags = [{x:y} for x,y in shape['tags'].items()]
-                points = self._from_points_to_voxel51_bounding_box(shape['points'], element) 
+                points = self._from_points_to_voxel51_bounding_box(shape['points'], element)
+                #
                 label = list(shape['tags'].values())[0]
                 type = shape['type']
                 tags.append({"label": label})
                 tags.append({"bounding_box": points})
                 tags.append({"type": type})
 
+                # Jsalas: Could you name this "aux" variable with a more representative name?
                 aux = {**shape['tags'], **{"bounding_box": points}, **{'label':label}}
                 result.append(fo.Detection(**aux))
 
@@ -166,19 +171,13 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
         if "_vector" in element['answers']:
             if element['answers'] != {}:
                 return element['answers']['_vector']
-            else:
-                return None
 
         # Is a platform project
         else:
-            print("ENTRA", element['answers'])
             # check answer is not empty
             if element['answers'] != {}:
                 answers = element['answers'].values()
-                return self._search_platform_layers(answers)           
-            else:
-                print('ENTRA2')
-                return None
+                return self._search_platform_layers(answers)
     
     
     def _search_platform_layers(self, answers):
@@ -190,8 +189,7 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
         """
         for answer in answers:
             if isinstance(answer, dict) and len(answer) != 0:
-                if "layers" in answer:
-                    return answer
+                return answer.get('layers')
                 
          
 
@@ -229,16 +227,19 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
 
         dictionary_item specifies where to search the substring in a key or in a value
         """
+        # string_list = list(dictionary.keys() if dictionary_item == 'value' else dictionary.values())
+        # print('string list: ', string_list)
+        # for item in string_list:
+        #     if substr in item:
+        #         return item
         for  key, value in dictionary.items():
-            if dictionary_item == 'value':
-                if substr in value:
-                    return value
-            if dictionary_item == 'key':
-                if substr in key:
-                    return value
+            value_conditional = dictionary_item == 'value' and substr in value
+            key_conditional = dictionary_item == 'key' and substr in key
+            if value_conditional or key_conditional:
+                return value
   
         raise SAMADatasetImporterException(
-            f'ERROR, Task meta data does not contains the value')
+            'ERROR, Task meta data does not contains the value')
                  
            
               
@@ -274,14 +275,14 @@ class CustomLabeledImageDataset(fot.LabeledImageDataset):
 
 class Point():
     def __init__(self, x, y):
-        self.x = x
-        self.y = y
+        self._x = x
+        self._y = y
 
     def get_x(self):
-        return self.x
+        return self._x
     
     def get_y(self):
-        return self.y
+        return self._y
 
 class Points(object):
     """Wrapper around np arrays that represent annotation points.
@@ -306,7 +307,7 @@ class VectorPoints(Points):
         super().__init__(coordinates)
         if len(self.get_coordinates()) == 0:
             raise SAMADatasetImporterException(
-                f'ERROR, the shape has empty coordinates')
+                'ERROR, the shape has empty coordinates')
         all_x = [np.take(x, 0) for x in self.get_coordinates()]
         all_y = [np.take(x, 1) for x in self.get_coordinates()]
         self._min_x = min(all_x)
@@ -334,7 +335,7 @@ class RectanglePoints(VectorPoints):
         super().__init__(coordinates)
         if len(self.get_coordinates()) != 4:
             raise SAMADatasetImporterException(
-                f'ERROR, the rectangle points are not valid')
+                'ERROR, the rectangle points are not valid')
 
     def calculate_width_and_height(self):
         """This method returns a tuple with the width and height of a rectangle.
