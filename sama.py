@@ -82,7 +82,7 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
         return \
             self.annotations == other.annotations, \
             self.filenames == other.filenames
-    
+
     def __len__(self):
         return len(self._filenames)  # Parsed in setup()
 
@@ -161,7 +161,7 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
                 detection = {**shape[Sama.TAGS.value], **
                              {"bounding_box": points}, **{'label': label}}
                 result.append(fo.Detection(**detection))
-                
+
         return {'detections': fo.Detections(detections=result)}
 
     def _get_answer_scene_attributes(self, element):
@@ -236,7 +236,7 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
 
         if image_height is None or image_width is None:
             image_width, image_height = self._calculate_image_dimensions(
-                                                                    element)
+                element)
 
         rectangle = RectanglePoints(np.array(points))
 
@@ -268,7 +268,6 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
     def _calculate_image_dimensions(self, element):
         image = Image.open(element[Sama.DATA.value][Sama.URL.value])
         return image.size
-        
 
 
 class CustomLabeledImageDataset(fot.LabeledImageDataset):
@@ -410,16 +409,3 @@ class SAMADatasetImporterException(Exception):
     def __str__(self):
         return 'details: {0}'.format(
             self._detailed_error)
-
-
-# def main():
-#     dataset_type = CustomLabeledImageDataset
-#     dataset_dir = '/Users/cviquez/Downloads/2022-06-07_15-54_56-790_BUG_9801_delivery.json'
-
-#     # Import dataset
-#     dataset = fo.Dataset.from_dir(
-#         dataset_dir=dataset_dir, dataset_type=dataset_type)
-
-#     # Start session
-#     session = fo.launch_app(dataset)
-#     session.wait()
