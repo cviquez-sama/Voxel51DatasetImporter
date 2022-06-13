@@ -1,12 +1,17 @@
 
-import fiftyone.utils.data as foud
-import fiftyone.core.metadata as fom
-import eta.core.serial as etas # Package comes with FiftyOne
-import numpy as np
 import math
 from enum import Enum
-import fiftyone.types as fot
+from fileinput import filename
+
+import eta.core.serial as etas
 import fiftyone as fo
+import fiftyone.core.metadata as fom
+import fiftyone.types as fot
+import fiftyone.utils.data as foud
+import numpy as np
+from charset_normalizer import detect
+from PIL import Image
+
 
 class Substring(Enum):
     HEIGHT = 'Height'
@@ -17,7 +22,21 @@ class Substring(Enum):
 class SearchIn(Enum):
     KEY = 'key'
     VALUE = 'value'
-    
+
+
+class Sama(Enum):
+    DATA = 'data'
+    LAYERS = 'layers'
+    VECTOR_TAGGING = 'vector_tagging'
+    SHAPES = 'shapes'
+    TAGS = 'tags'
+    POINTS = 'points'
+    TYPE = 'type'
+    ANSWERS = 'answers'
+    VECTOR_GO_ANSWER = '_vector'
+    URL = 'url'
+
+
 class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
     """ Import SAMA-formatted datasets into FiftyOne
         Args:
@@ -37,7 +56,7 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
         shuffle=False,
         seed=None,
         max_samples=None,
-        **kwargs, # Add any other arguments you want
+        **kwargs,  # Add any other arguments you want
     ):
         super().__init__(
             dataset_dir=dataset_dir,
@@ -45,16 +64,28 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
             seed=seed,
             max_samples=max_samples,
         )
-        
+
     def setup(self):
         annotations = self._parse_sama_labels(self.dataset_dir)
         self._filenames = [key for dict in annotations for key in dict.keys()]
-        self._annotations = annotations 
-        
-    def __len__(self):
-        return len(self._filenames) # Parsed in setup()
+        self._annotations = annotations
+
+    @property
+    def annotations(self):
+        return self._annotations
+
+    @property
+    def filenames(self):
+        return self._filenames
+
+    def __eq__(self, other):
+        return \
+            self.annotations == other.annotations, \
+            self.filenames == other.filenames
     
-    # A convenient way to iterate through samples one at a time
+    def __len__(self):
+        return len(self._filenames)  # Parsed in setup()
+
     def __iter__(self):
         self._iter_filenames = iter(self._filenames)
         return self
@@ -63,36 +94,32 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
         filename = next(self._iter_filenames)
         sample_labels = self._get_sample_labels(filename)
         metadata = fom.ImageMetadata.build_for(filename)
-        
+
         return filename, metadata, sample_labels
 
     def _get_sample_labels(self, filename):
         for element in self._annotations:
-            # for key,value in element.items():
-            #     if key == filename:
-            #         return value
             if filename in element:
                 return element[filename]
-        
 
     @property
     def label_cls(self):
         return None
-        
+
     @property
     def has_image_metadata(self):
-        return True # If you want to parse the ImageMetadata
-        
+        return True
+
     @property
     def has_dataset_info(self):
-        return False # Unless you want to store any dataset-level information
+        return False
 
-
-    def _parse_sama_labels(self,dataset_dir):
+    def _parse_sama_labels(self, dataset_dir):
         """This method returns a list with annotations in voxel51 format
 
-        Each annotation is a dictionary. The key corresponds to the asset s3 URI
-        ans the value contains the scene attributes and a list of detections.
+        Each annotation is a dictionary. The key corresponds to the asset
+        s3 URI and the value contains the scene attributes and a list of
+        detections.
         """
         labels_dict = etas.load_json(dataset_dir)
         result = []
@@ -101,64 +128,60 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
             layer = self._get_answers_layers(element)
             url = self._get_url(element)
 
-            if layer is not None :
+            if layer is not None:
                 detections = self._from_answer_to_detection(layer, element)
                 scene_attributes = self._get_answer_scene_attributes(element)
-                result.append({url:{**detections, **scene_attributes}})
+                result.append({url: {**detections, **scene_attributes}})
             else:
-                result.append({url:{}})
+                result.append({url: {}})
 
         return result
 
-    def _from_answer_to_detection(self,layers, element):
+    def _from_answer_to_detection(self, layers, element):
         """This method returns a valid detection dictionary
 
-        Voxel51 provides fo.Detections class that converts 
-        the input data into a detection 
-        Reference: https://voxel51.com/docs/fiftyone/user_guide/using_datasets.html#object-detection
+        Voxel51 provides fo.Detections class that converts
+        the input data into a detection
+        Reference:
+        https://voxel51.com/docs/fiftyone/user_guide/using_datasets.html#object-detection
         """
         result = []
-        # Jsalas: Can we put all sama-format strings in an Enum?
-        vectors = layers['layers']['vector_tagging']
+        vectors = layers[Sama.VECTOR_TAGGING.value]
         for vector in vectors:
-            shapes = vector['shapes']
+            shapes = vector[Sama.SHAPES.value]
             for shape in shapes:
-                tags = [{x:y} for x,y in shape['tags'].items()]
-                points = self._from_points_to_voxel51_bounding_box(shape['points'], element)
-                #
-                label = list(shape['tags'].values())[0]
-                type = shape['type']
+                tags = [{x: y} for x, y in shape['tags'].items()]
+                points = self._from_points_to_voxel51_bounding_box(
+                    shape[Sama.POINTS.value], element)
+                label = list(shape[Sama.TAGS.value].values())[0]
+                type = shape[Sama.TYPE.value]
                 tags.append({"label": label})
                 tags.append({"bounding_box": points})
                 tags.append({"type": type})
-
-                # Jsalas: Could you name this "aux" variable with a more representative name?
-                aux = {**shape['tags'], **{"bounding_box": points}, **{'label':label}}
-                result.append(fo.Detection(**aux))
-
+                detection = {**shape[Sama.TAGS.value], **
+                             {"bounding_box": points}, **{'label': label}}
+                result.append(fo.Detection(**detection))
+                
         return {'detections': fo.Detections(detections=result)}
 
-
-
     def _get_answer_scene_attributes(self, element):
-        """This method returns the scene attributes in an answer 
+        """This method returns the scene attributes in an answer
 
-        The scene attributes describe qualities of the asset. It can be daytime,
-        a place, asset quality etc.
+        The scene attributes describe qualities of the asset. It can be
+        daytime, a place, asset quality etc.
         """
         result = {}
-        for key,value in element['answers'].items():
+        for key, value in element[Sama.ANSWERS.value].items():
             if not isinstance(value, dict):
-                result[key]=value
+                result[key] = value
         return result
-        
+
     def _get_answers_layers(self, element):
         """This method returns the layers of an annotation
 
-        Layers is a nested input inside :answers" the parent key 
-        of layers can change. If the project was set up on 
-        Sama Go the key corresponds to _vector on Sama Platform the 
-        key is set up by the user.
+        Layers is a nested input inside :answers" the parent key of layers can
+        change. If the project was set up on Sama Go the key corresponds to
+        _vector on Sama Platform the key is set up by the user.
 
         {"answers":{
             "<key>":{
@@ -168,84 +191,88 @@ class SAMADatasetImporter(foud.LabeledImageDatasetImporter):
         }
         """
         # Is a Sama Go project
-        if "_vector" in element['answers']:
-            if element['answers'] != {}:
-                return element['answers']['_vector']
+        if "_vector" in element[Sama.ANSWERS.value]:
+            if element[Sama.ANSWERS.value] != {}:
+                return element[Sama.ANSWERS.value][Sama.VECTOR_GO_ANSWER.value]
 
         # Is a platform project
         else:
             # check answer is not empty
-            if element['answers'] != {}:
-                answers = element['answers'].values()
+            if element[Sama.ANSWERS.value] != {}:
+                answers = element[Sama.ANSWERS.value].values()
                 return self._search_platform_layers(answers)
-    
-    
+
     def _search_platform_layers(self, answers):
         """This method returns a dictionary with the answer
 
         Only one value inside answers is a dictionary
-        and this corresponds to layers. 
+        and this corresponds to layers.
         This is a way to get the value without knowing the key name
         """
         for answer in answers:
             if isinstance(answer, dict) and len(answer) != 0:
-                return answer.get('layers')
-                
-         
+                return answer.get(Sama.LAYERS.value)
 
     def _get_url(self, element):
-        return self._search_substring_in_dictionary(element['data'], Substring.HTTPS.value, SearchIn.VALUE.value)
-                 
-              
-    def _from_points_to_voxel51_bounding_box(self, points, element):
-        """This method returns a list with the values needed to draw a bounding box
+        return self._search_substring_in_dictionary(
+            element[Sama.DATA.value], Substring.HTTPS.value, SearchIn.VALUE.value)
 
-        Sama annotation points follow the structure [[x1,y1],[x1,y2],[x2,y2],[x2,y1]]
+    def _from_points_to_voxel51_bounding_box(self, points, element):
+        """This method returns a list with the values needed to draw a
+        bounding box
+
+        Sama annotation points follow the structure:[[x1,y1],[x1,y2],
+                                                     [x2,y2],[x2,y1]]
         Voxel51 requires the format:[x1, y1, width , height]
-        Reference: https://voxel51.com/docs/fiftyone/recipes/adding_detections.html?highlight=bounding%20box
+        Reference:
+        https://voxel51.com/docs/fiftyone/recipes/adding_detections.html?highlight=bounding%20box
         """
-       
+
         # Get key values based on suffix "Width" and "Height"
-        image_height = int(self._search_substring_in_dictionary(element['data'], Substring.HEIGHT.value, SearchIn.KEY.value))
-        image_width = int(self._search_substring_in_dictionary(element['data'], Substring.WIDTH.value, SearchIn.KEY.value))
+        image_height = self._search_substring_in_dictionary(
+            element[Sama.DATA.value], Substring.HEIGHT.value, SearchIn.KEY.value)
+        image_width = self._search_substring_in_dictionary(
+            element[Sama.DATA.value], Substring.WIDTH.value, SearchIn.KEY.value)
+
+        if image_height is None or image_width is None:
+            image_width, image_height = self._calculate_image_dimensions(
+                                                                    element)
 
         rectangle = RectanglePoints(np.array(points))
 
-        top_left_x_point = rectangle.get_top_left_point().get_x()
-        top_left_y_point = rectangle.get_top_left_point().get_y()
-        bottom_right_x_point = rectangle.get_bottom_right_point().get_x()
-        bottom_right_y_point = rectangle.get_bottom_right_point().get_y()
+        top_left_x_point = rectangle.get_top_left_point().get_x
+        top_left_y_point = rectangle.get_top_left_point().get_y
+        bottom_right_x_point = rectangle.get_bottom_right_point().get_x
+        bottom_right_y_point = rectangle.get_bottom_right_point().get_y
 
-        relative_width = (bottom_right_x_point - top_left_x_point) / image_width
-        relative_height = (bottom_right_y_point - top_left_y_point) / image_height
+        relative_width = (bottom_right_x_point -
+                          top_left_x_point) / int(image_width)
+        relative_height = (bottom_right_y_point -
+                           top_left_y_point) / int(image_height)
 
-        return [ top_left_x_point/image_width, top_left_y_point/image_height, relative_width , relative_height ]
+        return [top_left_x_point / int(image_width), top_left_y_point /
+                int(image_height), relative_width, relative_height]
 
-        
-    def _search_substring_in_dictionary(self, dictionary, substr, dictionary_item):
-        """This method returns a string that contains a specific substring
+    def _search_substring_in_dictionary(
+            self, dictionary, substr, dictionary_item):
+        """This method returns a string that contains a specific substring.
 
         dictionary_item specifies where to search the substring in a key or in a value
         """
-        # string_list = list(dictionary.keys() if dictionary_item == 'value' else dictionary.values())
-        # print('string list: ', string_list)
-        # for item in string_list:
-        #     if substr in item:
-        #         return item
-        for  key, value in dictionary.items():
+        for key, value in dictionary.items():
             value_conditional = dictionary_item == 'value' and substr in value
             key_conditional = dictionary_item == 'key' and substr in key
             if value_conditional or key_conditional:
                 return value
-  
-        raise SAMADatasetImporterException(
-            'ERROR, Task meta data does not contains the value')
-                 
-           
-              
+
+    def _calculate_image_dimensions(self, element):
+        image = Image.open(element[Sama.DATA.value][Sama.URL.value])
+        return image.size
+        
+
 
 class CustomLabeledImageDataset(fot.LabeledImageDataset):
-    
+
     """Custom labeled image dataset type."""
 
     def get_dataset_importer_cls(self):
@@ -254,12 +281,11 @@ class CustomLabeledImageDataset(fot.LabeledImageDataset):
         class for importing datasets of this type from disk.
 
         Returns:
-            a :class:`fiftyone.utils.data.importers.LabeledImageDatasetImporter`
+            a:class:`fiftyone.utils.data.importers.LabeledImageDatasetImporter`
             class
         """
 
         return SAMADatasetImporter
-
 
     def get_dataset_exporter_cls(self):
         """Returns the
@@ -267,22 +293,29 @@ class CustomLabeledImageDataset(fot.LabeledImageDataset):
         class for exporting datasets of this type to disk.
 
         Returns:
-            a :class:`fiftyone.utils.data.exporters.LabeledImageDatasetExporter`
+            a:class:`fiftyone.utils.data.exporters.LabeledImageDatasetExporter`
             class
         """
         # Return your custom LabeledImageDatasetExporter class here
         pass
+
 
 class Point():
     def __init__(self, x, y):
         self._x = x
         self._y = y
 
+    def __eq__(self, other):
+        return self._x == other.get_x and self._y == other.get_y
+
+    @property
     def get_x(self):
         return self._x
-    
+
+    @property
     def get_y(self):
         return self._y
+
 
 class Points(object):
     """Wrapper around np arrays that represent annotation points.
@@ -294,8 +327,10 @@ class Points(object):
     def __eq__(self, other):
         return self._coordinates.tolist() == other._coordinates.tolist()
 
+    @property
     def get_coordinates(self):
         return self._coordinates
+
 
 class VectorPoints(Points):
     """Abstract class for vector shapes
@@ -305,26 +340,30 @@ class VectorPoints(Points):
 
     def __init__(self, coordinates):
         super().__init__(coordinates)
-        if len(self.get_coordinates()) == 0:
+        if len(self.get_coordinates) == 0:
             raise SAMADatasetImporterException(
                 'ERROR, the shape has empty coordinates')
-        all_x = [np.take(x, 0) for x in self.get_coordinates()]
-        all_y = [np.take(x, 1) for x in self.get_coordinates()]
+        all_x = [np.take(x, 0) for x in self.get_coordinates]
+        all_y = [np.take(x, 1) for x in self.get_coordinates]
         self._min_x = min(all_x)
         self._max_x = max(all_x)
         self._min_y = min(all_y)
         self._max_y = max(all_y)
 
-    def get_max_x(self):
+    @property
+    def max_x(self):
         return self._max_x
 
-    def get_min_x(self):
+    @property
+    def min_x(self):
         return self._min_x
 
-    def get_max_y(self):
+    @property
+    def max_y(self):
         return self._max_y
 
-    def get_min_y(self):
+    @property
+    def min_y(self):
         return self._min_y
 
 
@@ -333,7 +372,7 @@ class RectanglePoints(VectorPoints):
 
     def __init__(self, coordinates):
         super().__init__(coordinates)
-        if len(self.get_coordinates()) != 4:
+        if len(self.get_coordinates) != 4:
             raise SAMADatasetImporterException(
                 'ERROR, the rectangle points are not valid')
 
@@ -342,9 +381,9 @@ class RectanglePoints(VectorPoints):
         It takes the min(x,y) point as reference and the corresponding points
         to create a 90 degrees angle, this combination always generate width and height.
         """
-        reference_coordinate = [self.get_min_x(), self.get_min_y()]
-        coordinate_for_width_line = [self.get_max_x(), self.get_min_y()]
-        coordinate_for_height_line = [self.get_min_x(), self.get_max_y()]
+        reference_coordinate = [self.min_x, self.min_y]
+        coordinate_for_width_line = [self.max_x, self.min_y]
+        coordinate_for_height_line = [self.min_x, self.max_y]
         height = self._find_distance(
             reference_coordinate, coordinate_for_width_line)
         width = self._find_distance(
@@ -358,10 +397,10 @@ class RectanglePoints(VectorPoints):
         return int(distance)
 
     def get_top_left_point(self):
-        return Point(self.get_min_x(), self.get_max_y())
+        return Point(self.min_x, self.max_y)
 
     def get_bottom_right_point(self):
-        return Point(self.get_max_x(), self.get_min_y())
+        return Point(self.max_x, self.min_y)
 
 
 class SAMADatasetImporterException(Exception):
@@ -373,13 +412,14 @@ class SAMADatasetImporterException(Exception):
             self._detailed_error)
 
 
-def main():
-    dataset_type = CustomLabeledImageDataset
-    dataset_dir = '/Users/cviquez/Downloads/2022-06-07_15-54_56-790_BUG_9801_delivery.json'
+# def main():
+#     dataset_type = CustomLabeledImageDataset
+#     dataset_dir = '/Users/cviquez/Downloads/2022-06-07_15-54_56-790_BUG_9801_delivery.json'
 
-    # Import dataset
-    dataset = fo.Dataset.from_dir(dataset_dir=dataset_dir, dataset_type=dataset_type)
+#     # Import dataset
+#     dataset = fo.Dataset.from_dir(
+#         dataset_dir=dataset_dir, dataset_type=dataset_type)
 
-    # Start session
-    session = fo.launch_app(dataset)
-    session.wait()
+#     # Start session
+#     session = fo.launch_app(dataset)
+#     session.wait()
